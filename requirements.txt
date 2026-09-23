@@ -7,4 +7,4 @@ scipy
 tensorflow
 streamlit
 joblib
-openpyxl
+openpyxlplotly
