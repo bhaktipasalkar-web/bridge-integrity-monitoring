@@ -2,10 +2,9 @@ numpy
 pandas
 matplotlib
 seaborn
-scikit-learn
 scipy
 tensorflow
 streamlit
 joblib
-openpyxl`r`nplotly
+openpyxl
 plotly
