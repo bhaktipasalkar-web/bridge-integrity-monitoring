@@ -1,0 +1,17 @@
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/
+
+# Local files
+*.log
+
+# Large/raw dataset
+data/
+
+# Temporary files
+.DS_Store
+Thumbs.db
