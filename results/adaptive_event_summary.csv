@@ -1,0 +1,11 @@
+metric,value
+Event Period Samples,1104
+Global Threshold,2.1126025600000005
+Global Event Anomalies,156
+Global Event Anomaly Percentage,14.13
+Adaptive Event Anomalies,95
+Adaptive Event Anomaly Percentage,8.61
+Warning Samples,127
+Critical Samples,29
+Maximum Reconstruction Error,2612.003
+Maximum Error Timestamp,2023-03-09 23:47:12

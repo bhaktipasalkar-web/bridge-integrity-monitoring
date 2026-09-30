@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import os
 
 # ==========================================
-# ANOMALY ANALYSIS
+# ANOMALY ANALYSIS + NOVELTY
 # BRIDGE STRUCTURAL HEALTH MONITORING
 # ==========================================
 
@@ -12,45 +12,172 @@ OUTPUT_FOLDER = "results"
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-print("=" * 60)
-print("ANOMALY ANALYSIS")
-print("=" * 60)
+print("=" * 70)
+print("BRIDGE ANOMALY ANALYSIS + ADAPTIVE SEVERITY DETECTION")
+print("=" * 70)
 
-# Load results
+# --------------------------------------------------
+# Load Autoencoder Results
+# --------------------------------------------------
+
 df = pd.read_csv(INPUT_FILE)
 df["ts"] = pd.to_datetime(df["ts"])
 
-# Load threshold
-threshold = df.loc[df["reconstruction_error"].idxmax(), "reconstruction_error"]
+# --------------------------------------------------
+# GLOBAL ANOMALY THRESHOLD
+# --------------------------------------------------
 
-# The actual threshold used by the Autoencoder pipeline
-# Recalculate from the same complete reconstruction-error dataset
 threshold = df["reconstruction_error"].quantile(0.95)
 
-df["anomaly"] = (
+df["global_threshold"] = threshold
+
+df["global_anomaly"] = (
     df["reconstruction_error"] > threshold
 ).astype(int)
 
 # --------------------------------------------------
-# Overall statistics
+# NOVELTY:
+# ADAPTIVE ROLLING THRESHOLD
+#
+# Previous observations are used to calculate
+# the local baseline.
+#
+# This avoids using the current observation
+# to calculate its own threshold.
+# --------------------------------------------------
+
+WINDOW_SIZE = 501
+MAD_MULTIPLIER = 3.0
+
+rolling_median = (
+    df["reconstruction_error"]
+    .shift(1)
+    .rolling(
+        window=WINDOW_SIZE,
+        min_periods=50
+    )
+    .median()
+)
+
+rolling_mad = (
+    df["reconstruction_error"]
+    .shift(1)
+    .rolling(
+        window=WINDOW_SIZE,
+        min_periods=50
+    )
+    .apply(
+        lambda x: (abs(x - x.median())).median(),
+        raw=False
+    )
+)
+
+# Robust adaptive threshold
+adaptive_threshold = (
+    rolling_median
+    + MAD_MULTIPLIER * 1.4826 * rolling_mad
+)
+
+# The adaptive threshold should never become
+# lower than the original global threshold.
+df["adaptive_threshold"] = (
+    adaptive_threshold
+    .fillna(threshold)
+    .clip(lower=threshold)
+)
+
+# --------------------------------------------------
+# ADAPTIVE ANOMALY
+# --------------------------------------------------
+
+df["adaptive_anomaly"] = (
+    df["reconstruction_error"]
+    > df["adaptive_threshold"]
+).astype(int)
+
+# --------------------------------------------------
+# SEVERITY CLASSIFICATION
+#
+# NORMAL   = below global threshold
+# WARNING  = above threshold
+# CRITICAL = more than 2x global threshold
+# --------------------------------------------------
+
+df["severity"] = "NORMAL"
+
+df.loc[
+    df["reconstruction_error"] > threshold,
+    "severity"
+] = "WARNING"
+
+df.loc[
+    df["reconstruction_error"] > (2 * threshold),
+    "severity"
+] = "CRITICAL"
+
+# --------------------------------------------------
+# OVERALL STATISTICS
 # --------------------------------------------------
 
 total_samples = len(df)
-anomaly_count = int(df["anomaly"].sum())
-normal_count = total_samples - anomaly_count
-anomaly_percentage = anomaly_count / total_samples * 100
 
-print("Total samples:", total_samples)
-print("Normal samples:", normal_count)
-print("Anomaly samples:", anomaly_count)
-print("Anomaly percentage:", round(anomaly_percentage, 2), "%")
-print("Threshold:", round(threshold, 6))
+global_anomaly_count = int(
+    df["global_anomaly"].sum()
+)
+
+adaptive_anomaly_count = int(
+    df["adaptive_anomaly"].sum()
+)
+
+normal_count = total_samples - global_anomaly_count
+
+warning_count = int(
+    (df["severity"] == "WARNING").sum()
+)
+
+critical_count = int(
+    (df["severity"] == "CRITICAL").sum()
+)
+
+global_anomaly_percentage = (
+    global_anomaly_count / total_samples * 100
+)
+
+adaptive_anomaly_percentage = (
+    adaptive_anomaly_count / total_samples * 100
+)
+
+print()
+print("TOTAL SAMPLES:", total_samples)
+print("GLOBAL THRESHOLD:", round(threshold, 6))
+
+print()
+print("GLOBAL ANOMALIES:", global_anomaly_count)
+print(
+    "GLOBAL ANOMALY PERCENTAGE:",
+    round(global_anomaly_percentage, 2),
+    "%"
+)
+
+print()
+print("ADAPTIVE ANOMALIES:", adaptive_anomaly_count)
+print(
+    "ADAPTIVE ANOMALY PERCENTAGE:",
+    round(adaptive_anomaly_percentage, 2),
+    "%"
+)
+
+print()
+print("NORMAL:", normal_count)
+print("WARNING:", warning_count)
+print("CRITICAL:", critical_count)
 
 # --------------------------------------------------
-# Plot 1: Complete reconstruction error
+# PLOT 1:
+# GLOBAL + ADAPTIVE THRESHOLD
 # --------------------------------------------------
 
-plt.figure(figsize=(14, 6))
+plt.figure(figsize=(15, 6))
 
 plt.plot(
     df["ts"],
@@ -59,42 +186,68 @@ plt.plot(
     label="Reconstruction Error"
 )
 
+plt.plot(
+    df["ts"],
+    df["adaptive_threshold"],
+    linewidth=1.2,
+    label="Adaptive Threshold"
+)
+
 plt.axhline(
     threshold,
     linestyle="--",
     linewidth=2,
-    label=f"Anomaly Threshold ({threshold:.3f})"
+    label=f"Global Threshold ({threshold:.3f})"
 )
 
-plt.title("Bridge Reconstruction Error Over Time")
+plt.title(
+    "Bridge Reconstruction Error with Adaptive Anomaly Threshold"
+)
+
 plt.xlabel("Timestamp")
 plt.ylabel("Reconstruction Error")
+
 plt.legend()
 plt.grid(True, alpha=0.3)
+
 plt.xticks(rotation=45)
 plt.tight_layout()
 
 plot1 = os.path.join(
     OUTPUT_FOLDER,
-    "reconstruction_error_overall.png"
+    "adaptive_anomaly_detection.png"
 )
 
-plt.savefig(plot1, dpi=150)
+plt.savefig(
+    plot1,
+    dpi=150
+)
+
 plt.close()
 
 # --------------------------------------------------
-# Plot 2: Documented event period
+# DOCUMENTED EVENT PERIOD
 # --------------------------------------------------
 
-event_start = pd.Timestamp("2023-03-09 23:40:00")
-event_end = pd.Timestamp("2023-03-10 00:10:00")
+event_start = pd.Timestamp(
+    "2023-03-09 23:40:00"
+)
+
+event_end = pd.Timestamp(
+    "2023-03-10 00:10:00"
+)
 
 event_df = df[
     (df["ts"] >= event_start) &
     (df["ts"] <= event_end)
 ].copy()
 
-plt.figure(figsize=(14, 6))
+# --------------------------------------------------
+# PLOT 2:
+# EVENT PERIOD
+# --------------------------------------------------
+
+plt.figure(figsize=(15, 6))
 
 plt.plot(
     event_df["ts"],
@@ -103,58 +256,103 @@ plt.plot(
     label="Reconstruction Error"
 )
 
+plt.plot(
+    event_df["ts"],
+    event_df["adaptive_threshold"],
+    linewidth=1.5,
+    label="Adaptive Threshold"
+)
+
 plt.axhline(
     threshold,
     linestyle="--",
     linewidth=2,
-    label=f"Threshold ({threshold:.3f})"
+    label=f"Global Threshold ({threshold:.3f})"
 )
 
 plt.title(
-    "Reconstruction Error Around Documented Bridge Event Period"
+    "Adaptive Anomaly Detection Around Documented Bridge Event"
 )
 
 plt.xlabel("Timestamp")
 plt.ylabel("Reconstruction Error")
+
 plt.legend()
 plt.grid(True, alpha=0.3)
+
 plt.xticks(rotation=45)
 plt.tight_layout()
 
 plot2 = os.path.join(
     OUTPUT_FOLDER,
-    "event_period_anomaly.png"
+    "adaptive_event_period.png"
 )
 
-plt.savefig(plot2, dpi=150)
+plt.savefig(
+    plot2,
+    dpi=150
+)
+
 plt.close()
 
 # --------------------------------------------------
-# Plot 3: Normal vs anomaly counts
+# PLOT 3:
+# SEVERITY DISTRIBUTION
 # --------------------------------------------------
 
-plt.figure(figsize=(7, 5))
+severity_counts = df[
+    "severity"
+].value_counts()
+
+plt.figure(figsize=(8, 5))
+
+severity_order = [
+    "NORMAL",
+    "WARNING",
+    "CRITICAL"
+]
+
+values = [
+    int(severity_counts.get(
+        level,
+        0
+    ))
+    for level in severity_order
+]
 
 plt.bar(
-    ["Normal", "Anomaly"],
-    [normal_count, anomaly_count]
+    severity_order,
+    values
 )
 
-plt.title("Normal vs Anomaly Samples")
+plt.title(
+    "Bridge Anomaly Severity Distribution"
+)
+
+plt.xlabel("Severity Level")
 plt.ylabel("Number of Samples")
-plt.grid(axis="y", alpha=0.3)
+
+plt.grid(
+    axis="y",
+    alpha=0.3
+)
+
 plt.tight_layout()
 
 plot3 = os.path.join(
     OUTPUT_FOLDER,
-    "normal_vs_anomaly.png"
+    "severity_distribution.png"
 )
 
-plt.savefig(plot3, dpi=150)
+plt.savefig(
+    plot3,
+    dpi=150
+)
+
 plt.close()
 
 # --------------------------------------------------
-# Top anomalies
+# TOP 20 ANOMALIES
 # --------------------------------------------------
 
 top_anomalies = df.sort_values(
@@ -173,39 +371,109 @@ top_anomalies.to_csv(
 )
 
 # --------------------------------------------------
-# Event-period summary
+# EVENT PERIOD SUMMARY
 # --------------------------------------------------
 
-event_anomalies = event_df[
-    event_df["anomaly"] == 1
+event_global_anomalies = event_df[
+    event_df["global_anomaly"] == 1
 ]
 
-event_summary = pd.DataFrame({
-    "metric": [
-        "Event Period Samples",
-        "Event Period Anomalies",
-        "Event Period Anomaly Percentage",
-        "Maximum Reconstruction Error",
-        "Maximum Error Timestamp"
-    ],
-    "value": [
-        len(event_df),
-        len(event_anomalies),
-        round(
-            len(event_anomalies) / len(event_df) * 100,
-            2
-        ) if len(event_df) > 0 else 0,
-        event_df["reconstruction_error"].max(),
-        event_df.loc[
-            event_df["reconstruction_error"].idxmax(),
-            "ts"
-        ] if len(event_df) > 0 else None
+event_adaptive_anomalies = event_df[
+    event_df["adaptive_anomaly"] == 1
+]
+
+event_warning = event_df[
+    event_df["severity"] == "WARNING"
+]
+
+event_critical = event_df[
+    event_df["severity"] == "CRITICAL"
+]
+
+if len(event_df) > 0:
+
+    event_max_row = event_df.loc[
+        event_df[
+            "reconstruction_error"
+        ].idxmax()
     ]
-})
+
+    event_summary = pd.DataFrame({
+
+        "metric": [
+
+            "Event Period Samples",
+
+            "Global Threshold",
+
+            "Global Event Anomalies",
+
+            "Global Event Anomaly Percentage",
+
+            "Adaptive Event Anomalies",
+
+            "Adaptive Event Anomaly Percentage",
+
+            "Warning Samples",
+
+            "Critical Samples",
+
+            "Maximum Reconstruction Error",
+
+            "Maximum Error Timestamp"
+
+        ],
+
+        "value": [
+
+            len(event_df),
+
+            threshold,
+
+            len(event_global_anomalies),
+
+            round(
+                len(event_global_anomalies)
+                / len(event_df)
+                * 100,
+                2
+            ),
+
+            len(event_adaptive_anomalies),
+
+            round(
+                len(event_adaptive_anomalies)
+                / len(event_df)
+                * 100,
+                2
+            ),
+
+            len(event_warning),
+
+            len(event_critical),
+
+            float(
+                event_max_row[
+                    "reconstruction_error"
+                ]
+            ),
+
+            event_max_row["ts"]
+
+        ]
+
+    })
+
+else:
+
+    event_summary = pd.DataFrame({
+        "metric": [],
+        "value": []
+    })
 
 summary_file = os.path.join(
     OUTPUT_FOLDER,
-    "event_summary.csv"
+    "adaptive_event_summary.csv"
 )
 
 event_summary.to_csv(
@@ -214,50 +482,116 @@ event_summary.to_csv(
 )
 
 # --------------------------------------------------
-# Final output
+# SAVE NOVELTY RESULTS
+# --------------------------------------------------
+
+novelty_file = os.path.join(
+    OUTPUT_FOLDER,
+    "novelty_anomaly_results.csv"
+)
+
+df.to_csv(
+    novelty_file,
+    index=False
+)
+
+# --------------------------------------------------
+# FINAL OUTPUT
 # --------------------------------------------------
 
 print()
-print("=" * 60)
+print("=" * 70)
 print("ANALYSIS COMPLETED")
-print("=" * 60)
-
-print("Overall graph:", plot1)
-print("Event graph:", plot2)
-print("Normal/Anomaly graph:", plot3)
-print("Top anomalies:", top_file)
-print("Event summary:", summary_file)
+print("=" * 70)
 
 print()
-print("Event period samples:", len(event_df))
-print("Event period anomalies:", len(event_anomalies))
+print("Generated Files:")
+
+print(
+    "1. Adaptive graph:",
+    plot1
+)
+
+print(
+    "2. Event-period graph:",
+    plot2
+)
+
+print(
+    "3. Severity graph:",
+    plot3
+)
+
+print(
+    "4. Top anomalies:",
+    top_file
+)
+
+print(
+    "5. Event summary:",
+    summary_file
+)
+
+print(
+    "6. Novelty results:",
+    novelty_file
+)
+
+print()
+print("=" * 70)
+print("EVENT PERIOD RESULTS")
+print("=" * 70)
+
+print(
+    "Event samples:",
+    len(event_df)
+)
+
+print(
+    "Global anomalies:",
+    len(event_global_anomalies)
+)
+
+print(
+    "Adaptive anomalies:",
+    len(event_adaptive_anomalies)
+)
+
+print(
+    "Warning samples:",
+    len(event_warning)
+)
+
+print(
+    "Critical samples:",
+    len(event_critical)
+)
 
 if len(event_df) > 0:
-    print(
-        "Event period anomaly percentage:",
-        round(
-            len(event_anomalies) / len(event_df) * 100,
-            2
-        ),
-        "%"
-    )
-
-    max_row = event_df.loc[
-        event_df["reconstruction_error"].idxmax()
-    ]
 
     print(
-        "Maximum event-period error:",
+        "Maximum reconstruction error:",
         round(
-            float(max_row["reconstruction_error"]),
+            float(
+                event_df[
+                    "reconstruction_error"
+                ].max()
+            ),
             6
         )
     )
 
     print(
         "Maximum error timestamp:",
-        max_row["ts"]
+        event_df.loc[
+            event_df[
+                "reconstruction_error"
+            ].idxmax(),
+            "ts"
+        ]
     )
 
 print()
-print("=" * 60)
+print("=" * 70)
+print("NOVELTY IMPLEMENTED SUCCESSFULLY")
+print("=" * 70)
