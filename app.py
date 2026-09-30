@@ -1,4 +1,14 @@
 import streamlit as st
+import textwrap
+
+_original_st_markdown = st.markdown
+
+def _markdown_dedented(body, *args, **kwargs):
+    if isinstance(body, str) and kwargs.get("unsafe_allow_html", False):
+        body = textwrap.dedent(body)
+    return _original_st_markdown(body, *args, **kwargs)
+
+st.markdown = _markdown_dedented
 import pandas as pd
 import numpy as np
 import plotly.express as px
