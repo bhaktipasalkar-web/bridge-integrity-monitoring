@@ -5,7 +5,7 @@ _original_st_markdown = st.markdown
 
 def _markdown_dedented(body, *args, **kwargs):
     if isinstance(body, str) and kwargs.get("unsafe_allow_html", False):
-        body = textwrap.dedent(body)
+        body = "\n".join(line.lstrip() for line in body.splitlines())
     return _original_st_markdown(body, *args, **kwargs)
 
 st.markdown = _markdown_dedented
